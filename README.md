@@ -59,20 +59,20 @@ const obj = new Proxy(data,{
   get(target,key){
     if(!activeEffect) return target[key]
 
-    let dapsMap = bucket.get(target)
-    if(!dapsMap) bucket.set(target, (depMap = new Map()))
+    let depsMap = bucket.get(target)
+    if(!depsMap) bucket.set(target, (depMap = new Map()))
 
-    let daps = dapsMap.get(key)
-    if(!daps) dapsMap.set(key,(deps = new Set()))
-    daps.add(activeEffect)
+    let deps = depsMap.get(key)
+    if(!deps) depsMap.set(key,(deps = new Set()))
+    deps.add(activeEffect)
 
     return target[key]
   },
   set(target,key,newVal){
     target[key] = newVal
-    const dapsMap = bucket.get(target)
-    if(!dapsMap) return 
-    const effects = dapsMap.get(key)
+    const depsMap = bucket.get(target)
+    if(!depsMap) return 
+    const effects = depsMap.get(key)
     effects && effects.forEach(fn => fn())
   }
 })
@@ -88,4 +88,38 @@ const obj = new Proxy(data,{
 target 
 |__ key
     |__ effect
+```
+
+接著讓我們重構一下 把副作用函數 `effect` 收集到桶裡的邏輯 與 觸發 `effect` 重新執行的邏輯
+
+```javascript
+const obj = new Proxy(data,{
+  get(target,key){
+    track(target,key)
+    return target[key]
+  },
+  set(target,key,newVal){
+    target[key] = newVal
+    trigger(target,key)
+  }
+})
+
+// 函數追蹤變化
+function track(target,key){
+  if(!activeEffect) return 
+  let depsMap = bucket.get(target)
+  if(!depsMap) bucket.set(target, (depsMap = new Map()))
+
+  let deps = depsMap.get(key)
+  if(!deps) depsMap.set(key,(deps = new Set()))
+  deps.add(activeEffect)
+}
+
+// 函數觸發變化
+function trigger(target,key){
+  const depsMap = bucket.get(target)
+  if(!depsMap) return
+  const effects = depsMap.get(key)
+  effects && effects.forEach(fn => fn())
+}
 ```
