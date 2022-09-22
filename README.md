@@ -1,6 +1,7 @@
 # 學習 vue 3 源碼
 
 ## 響應系統
+代碼可參考 `feature/reactivity` 分支
 ### 如何使一個物件能夠變成響應式數據呢?
 目前我們有一個函式 effect , 用來更新 `document.body.innterText` 的值， 而變數 `obj.text` 則是我們打算顯示在 `body` 上
 
@@ -123,3 +124,23 @@ function trigger(target,key){
   effects && effects.forEach(fn => fn())
 }
 ```
+
+### 分支切換 與 cleanup
+
+首先必須先明確分支切換的定義
+```
+const data = { ok :true, text: 'hello world'}
+const obj = new Proxy(data,{/* ... */})
+
+effect(function effectFn () {
+  document.body.innerText = obj.ok ? obj.text : 'not'
+})
+```
+
+根據 `obj.ok` 值不同，會執行不同的代碼分支，當 `obj.ok` 值發生變化時，代碼執行的分支也會跟著發生變化，這就是所謂的分支切換。  
+
+分支切換可能會產生遺留的副作用函式，以上面例子來說，當 `obj.ok = true` 時， `obj.ok` 與 `obj.text` 分別會存入依賴集合 `effectFn`。  
+
+而 `obj.ok = false` 時，`effectFn` 副作用函式不應該存在 `obj.text` 的依賴集合中，否則當 `obj.text` 值發生變化，還是會觸發 `effectFn`， 即使已經確定 `effectFn` 的值為 `not` 。 
+
+要解決這個問題的思路很簡單，只要當執行副作用函式時，把他從所有與之關聯的依賴集合中刪除，當副作用函式執行完畢後，會重新建立聯繫，這樣就可以把遺留的副作用函式刪除。  

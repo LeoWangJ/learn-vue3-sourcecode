@@ -2,10 +2,24 @@ const bucket = new WeakMap()
 
 let activeEffect
 function effect (fn){
-  activeEffect = fn
-  fn()
+  const effectFn = () =>{
+    cleanup(effectFn)
+    activeEffect = effectFn
+    fn()
+  }
+  effectFn.deps = []
+  effectFn()
 }
-const data = {text:'hello'}
+
+function cleanup(effectFn) {
+  for(let i = 0;i < effectFn.deps.length;i++){
+    const deps = effectFn.deps[i]
+    deps.delete(effectFn)
+  }
+  effectFn.deps.length = 0
+}
+
+const data = { ok :true, text: 'hello world'}
 
 const obj = new Proxy(data,{
   get(target,key){
@@ -27,6 +41,7 @@ function track(target,key){
   let deps = depsMap.get(key)
   if(!deps) depsMap.set(key,(deps = new Set()))
   deps.add(activeEffect)
+  activeEffect.deps.push(deps)
 }
 
 // 函數觸發變化
@@ -34,11 +49,18 @@ function trigger(target,key){
   const depsMap = bucket.get(target)
   if(!depsMap) return
   const effects = depsMap.get(key)
-  effects && effects.forEach(fn => fn())
+  // 參考 Set.prototype.forEach 
+  const effectsToRun = new Set(effects)
+  effectsToRun.forEach(effectFn => effectFn())
 }
 
 // test
-effect(()=> { document.body.innerText = obj.text})
+effect(function effectFn () {
+  document.body.innerText = obj.ok ? obj.text : 'not'
+})
+setTimeout(()=>{
+  obj.ok = false
+},3000)
 setTimeout(() =>{
   obj.text = 'hello vu3'
-},1000)
+},5000)
