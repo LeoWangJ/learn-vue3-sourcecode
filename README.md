@@ -143,4 +143,38 @@ effect(function effectFn () {
 
 而 `obj.ok = false` 時，`effectFn` 副作用函式不應該存在 `obj.text` 的依賴集合中，否則當 `obj.text` 值發生變化，還是會觸發 `effectFn`， 即使已經確定 `effectFn` 的值為 `not` 。 
 
-要解決這個問題的思路很簡單，只要當執行副作用函式時，把他從所有與之關聯的依賴集合中刪除，當副作用函式執行完畢後，會重新建立聯繫，這樣就可以把遺留的副作用函式刪除。  
+要解決這個問題的思路很簡單，只要當執行副作用函式時把他從所有與之關聯的依賴集合中刪除(`cleanup`)，當副作用函式執行完畢後，會重新建立聯繫，這樣就可以把遺留的副作用函式刪除。  
+
+為了完成上面步驟，我們需要
+1. 執行 `effect` 時創建一個空陣列來儲存 有依賴 `effectFn` 的集合
+2. 當 `effectFn` 被執行時，先刪除關聯的依賴集合 (`cleanup`)
+3. 在 `track` 中重新建立聯繫
+
+再完成上面功能後，我們來測試看看
+
+```
+const data = { ok :true, text: 'hello world'}
+
+/* 省略 obj... */
+
+1.
+effect(function effectFn () {
+  document.body.innerText = obj.ok ? obj.text : 'not'
+})
+
+2. 
+setTimeout(()=>{
+  obj.ok = false
+},3000)
+
+3.
+setTimeout(() =>{
+  obj.text = 'hello vu3'
+},5000)
+```
+
+1.  觸發 `effectFn`, 並且在 track 中會將 `obj.ok` & `obj.text` 存進 `activeEffect.deps` 中， 而 `effectFn` 會被存進  `obj.ok` & `obj.text` 的依賴集合中。
+
+2. 觸發 `trigger`， 此時會執行 `obj.ok` 的依賴集合，執行依賴集合(`effectFn`)時會先刪除與之關聯的依賴集合(`cleanup`) 也就是 `obj.ok` & `obj.text`，當`effectFn` 執行完畢， `track` 會重新建立聯繫(`activeEffect.deps`)，此時只有 `obj.ok` 的`track` 被觸發，也就完成了我們刪除代碼分支存在遺留的副作用函式問題。
+
+3. 觸發 `obj.text` 的 `trigger`， 不過由於再上一步已經將依賴集合刪除了，此時`bucket` 裡的 `obj.text` 依賴集合為空集合，因此不會任何的依賴集合。 

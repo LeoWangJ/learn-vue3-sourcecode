@@ -11,6 +11,7 @@ function effect (fn){
   effectFn()
 }
 
+// 刪除與之關聯的集合
 function cleanup(effectFn) {
   for(let i = 0;i < effectFn.deps.length;i++){
     const deps = effectFn.deps[i]
@@ -41,6 +42,7 @@ function track(target,key){
   let deps = depsMap.get(key)
   if(!deps) depsMap.set(key,(deps = new Set()))
   deps.add(activeEffect)
+  // 與當前副作用函式存在聯繫的依賴集合
   activeEffect.deps.push(deps)
 }
 
@@ -49,7 +51,7 @@ function trigger(target,key){
   const depsMap = bucket.get(target)
   if(!depsMap) return
   const effects = depsMap.get(key)
-  // 參考 Set.prototype.forEach 
+  // 創建一個新的Set，可參考 Set.prototype.forEach 會造成什麼問題
   const effectsToRun = new Set(effects)
   effectsToRun.forEach(effectFn => effectFn())
 }
