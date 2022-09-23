@@ -128,7 +128,7 @@ function trigger(target,key){
 ### 分支切換 與 cleanup
 
 首先必須先明確分支切換的定義
-```
+```javascript
 const data = { ok :true, text: 'hello world'}
 const obj = new Proxy(data,{/* ... */})
 
@@ -150,9 +150,9 @@ effect(function effectFn () {
 2. 當 `effectFn` 被執行時，先刪除關聯的依賴集合 (`cleanup`)
 3. 在 `track` 中重新建立聯繫
 
-再完成上面功能後，我們來測試看看
+再完成[上面功能](https://github.com/LeoWangJ/learn-vue3-sourcecode/commit/051186c7b42c1259b432cf79a359d3087f8a0565)後，我們來測試看看
 
-```
+```javascript
 const data = { ok :true, text: 'hello world'}
 
 /* 省略 obj... */
@@ -178,3 +178,115 @@ setTimeout(() =>{
 2. 觸發 `trigger`， 此時會執行 `obj.ok` 的依賴集合，執行依賴集合(`effectFn`)時會先刪除與之關聯的依賴集合(`cleanup`) 也就是 `obj.ok` & `obj.text`，當`effectFn` 執行完畢， `track` 會重新建立聯繫(`activeEffect.deps`)，此時只有 `obj.ok` 的`track` 被觸發，也就完成了我們刪除代碼分支存在遺留的副作用函式問題。
 
 3. 觸發 `obj.text` 的 `trigger`， 不過由於再上一步已經將依賴集合刪除了，此時`bucket` 裡的 `obj.text` 依賴集合為空集合，因此不會任何的依賴集合。 
+
+### 嵌套的 effect 與 effect stack
+
+其實 Vue 的渲染函數是在一個 effect 中執行的
+
+```javascript
+const Foo = {
+  render(){
+    return /* ... */
+  }
+}
+
+
+effect(()=>{
+  Foo.render()
+})
+```
+
+當組件發生嵌套時，其實就發生了 `effect` 嵌套
+
+```javascript
+const Bar = {
+  render(){ /* ... */}
+}
+
+const Foo = {
+  render() {
+    return <Bar/>
+  }
+}
+
+effect(()=>{
+  Foo.render()
+  effect(()=>{
+    Bar.render()
+  })
+})
+```
+
+不過目前我們的 `effect` 是不支持嵌套的，由於我們用全局變數 `activeEffect` 來儲存副作用函數，而同時間所儲存的副作用函數只能有一個，並且沒有辦法還原之前的副作用函式，而我們可以使用 stack 收集副作用函式來解決該問題。  
+
+```javascript
+function effect (fn){
+  const effectFn = () =>{
+    cleanup(effectFn)
+    activeEffect = effectFn
+    effectStack.push(effectFn)
+    fn()
+    effectStack.pop(effectFn)
+    activeEffect = effectStack[effectStack.length - 1]
+  }
+  effectFn.deps = []
+  effectFn()
+}
+```
+
+### 避免無限遞迴循環
+先看個例子
+```javascript
+const data = { foo: 1}
+const obj = new Proxy(data,{/* ... */})
+
+effect(()=> obj.foo++)
+```
+
+`obj.foo++` 為自增程式碼，該操作會造成棧溢出問題，原因是讀取 `obj.foo` 值時觸發 `track` 操作，將當前副函式收集到桶中，接著加1 賦值給 `obj.foo`，觸發了 `trigger` 操作，而 `trigger` 會執行副作用函式，但當前的副作用函式還沒執行完畢，所以造成無限遞迴調用自己，產生了棧溢出。  
+
+如果 `trigger` 觸發執行的副作用函式與當前正在執行的副作用函式相同，則不進行觸發
+```javascript
+
+function trigger(target,key){
+  const depsMap = bucket.get(target)
+  if(!depsMap) return
+  const effects = depsMap.get(key)
+  // 新增
+  effects && effects.forEach(effectFn =>{
+    if(effectFn !== activeEffect){
+      effectsToRun.add(effectFn)
+    }
+  })
+
+  const effectsToRun = new Set(effects)
+  effectsToRun.forEach(effectFn => effectFn())
+}
+
+```
+
+### 調度執行
+
+可調度性是響應系統非常重要的特性，所謂可調度性是指當 `trigger` 動作觸發副作用函數重新執行時，有能力決定副作用函式執行的時機、次數以及方式。  
+
+我們可以為 `effect` 設計一個選項參數 `options`，允許用戶指定調度器 `scheduler`，並且在`trigger` 判斷如果有調度器時，則執行調度器，讓使用者可以自由決定副作用函數執行時機、次數、方式。  
+``` javascript
+function effect (fn,options = {}){
+  /* ... */
+  effectFn.options = options
+  effectFn.deps = []
+  effectFn()
+}
+
+function trigger(target,key){
+  /* ... */
+  effectsToRun.forEach(effectFn => {
+    // 如果存在調度器，則調用調度器，並將副作用函式作為參數傳遞
+    if(effectFn.options.scheduler){
+      effectFn.options.scheduler(effectFn)
+    }else{
+      effectFn()
+    }
+  })
+}
+```
