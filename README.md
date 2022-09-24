@@ -252,6 +252,7 @@ function trigger(target,key){
   const depsMap = bucket.get(target)
   if(!depsMap) return
   const effects = depsMap.get(key)
+  const effectsToRun = new Set(effects)
   // 新增
   effects && effects.forEach(effectFn =>{
     if(effectFn !== activeEffect){
@@ -259,7 +260,6 @@ function trigger(target,key){
     }
   })
 
-  const effectsToRun = new Set(effects)
   effectsToRun.forEach(effectFn => effectFn())
 }
 
@@ -289,4 +289,132 @@ function trigger(target,key){
     }
   })
 }
+```
+
+### 計算屬性 computed 與 lazy
+
+當前我們所實現的 `effect` 會立即執行傳給他的副作用函式，但是在某些場景我們並不希望立即執行，而是在需要他時才執行，例如 `computed`，這時懶執行 (`lazy`) 的 `effect` 可以達到目的。
+可以在 `options` 中添加 `lazy` 屬性，只要 `lazy = true` 就不立即執行副作用函式。  
+
+```javascript
+function effect (fn,options = {}){
+  /* ... */
+  effectFn.options = options
+  effectFn.deps = []
+  // 非 lazy 的時候才執行
+  if(!options.lazy){
+    effectFn()
+  }
+  // 將副作用函式回傳
+  return effectFn
+}
+```
+
+此時將副作用函式當作一個 `getter`，這樣手動執行副作用函數時，就能夠拿到返回值。 
+
+```javascript
+const effectFn = effect(
+  () => obj.foo + obj.bar,
+  { lazy : true }
+)
+const value = effectFn()
+```
+
+不過依照目前 `effect` 函式，還沒辦法返回 `getter` 的值，因為現在返回的只是我們代理的副作用函式，並不是真正副作用函式處理後的值，我們需要再對 `effect` 做處理
+
+```javascript
+function effect (fn,options = {}){
+  const effectFn = () =>{
+    cleanup(effectFn)
+    activeEffect = effectFn
+    effectStack.push(effectFn)
+    const res = fn()
+    effectStack.pop(effectFn)
+    activeEffect = effectStack[effectStack.length - 1]
+    // 新增: 將真正的副作用函式執行結果返回
+    return res
+  }
+  effectFn.options = options
+  effectFn.deps = []
+  // 非 lazy 的時候才執行
+  if(!options.lazy){
+    effectFn()
+  }
+  return effectFn
+}
+```
+
+依照上面的修改，此時我們的響應式數據功能已經能實現計算屬性了
+
+```javascript
+function computed(getter){
+  const effectFn = effect(getter,{
+    lazy:true
+  })
+  const obj = {
+    // 當讀取 value 時才會執行 effectFn
+    get value(){
+      return effectFn()
+    }
+  }
+
+  return obj
+}
+
+// test
+const data = {  bar:1, foo: 2 }
+const obj = new Proxy(data, { /* ... */})
+
+const sumRes = computed(()=> obj.bar + obj.foo)
+console.log(sumRes.value) // 3
+```
+
+不過目前讀取 `computed` 的回傳值，就會觸發一次副作用函式來進行計算，就算監聽的值沒有發生變化。我們需要對其優化，添加對值進行緩存的功能 
+
+```javascript
+function computed(getter){
+  // 緩存上一次計算的值
+  let value 
+  // 標示是否需要重新計算值， 為 true 代表 需要計算
+  let dirty = true
+
+  const effectFn = effect(getter,{
+    lazy:true,
+    // 調度器中將 dirty 重置為 true ， 避免監聽的值修改了卻不會重新計算
+    scheduler(){
+      dirty = true
+    }
+  })
+  const obj = {
+    // 當讀取 value 時才會執行 effectFn
+    get value(){
+      if(dirty){
+        value = effectFn()
+        dirty = false
+      }
+      return value
+    }
+  }
+
+  return obj
+}
+```
+
+不過還是有一個缺陷，當 `computed` 值發生變化時，我們讀取`sumRes.value` 的副作用函式並不會被觸發。
+
+```javascript
+const sumRes = computed(()=> obj.foo + obj.bar)
+// computed 發生變化時，並不會再次調用該副作用函式
+effect(()=>{
+  console.log(sumRes.value)
+})
+
+obj.foo++
+```
+
+原因出自於 `computed` 裡的 `effect` 是懶執行的，只有當真正讀取`computed` 的值時才會執行，所以對於修改`computed` 依賴 `obj.foo` 的值，並沒有讀取 `sumRes.value` 而副作用函式當然也沒被觸發
+
+解決方法很簡單，當讀取`computed` 的值時，我們可以手動調用`track` 進行追蹤，當 `computed` 依賴的響應式數據發生變化時，則手動調用 `trigger` 觸發響應
+
+```javascript
 ```
