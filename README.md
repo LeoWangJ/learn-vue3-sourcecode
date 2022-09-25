@@ -417,4 +417,171 @@ obj.foo++
 解決方法很簡單，當讀取`computed` 的值時，我們可以手動調用`track` 進行追蹤，當 `computed` 依賴的響應式數據發生變化時，則手動調用 `trigger` 觸發響應
 
 ```javascript
+function computed(getter){
+  // 緩存上一次計算的值
+  let value 
+  // 標示是否需要重新計算值， 為 true 代表 需要計算
+  let dirty = true
+
+  const effectFn = effect(getter,{
+    lazy:true,
+    // 調度器中將 dirty 重置為 true ， 避免監聽的值修改了卻不會重新計算
+    scheduler(){
+      dirty = true
+      // 當計算屬性依賴的響應式數據發生變化時，手動調用 trigger 觸發響應
+      trigger(obj,'value')
+    }
+  })
+  const obj = {
+    // 當讀取 value 時才會執行 effectFn
+    get value(){
+      if(dirty){
+        value = effectFn()
+        dirty = false
+      }
+      // 當讀取 value 時，手動調用 track 進行追蹤
+      track(obj,'value')
+      return value
+    }
+  }
+
+  return obj
+}
+
+```
+
+### watch 的實現原理
+
+`watch` 其本質就是觀測一個響應式數據，當數據發生變化時通知並執行相對應的回調函數。
+是利用了 `effect` 以及 `options.scheduler` 選項組合而成
+
+```javascript
+function watch(source,cb){
+  effect(
+    // 調用 traverse 遞歸地讀取
+    ()=> traverse(source),
+    {
+      scheduler(){
+        cb()
+      }
+    }
+  )
+}
+
+function traverse(value,seen = new Set()){
+  // 如果要讀取的數據是原始值，或者已經被讀取過了，那什麼都不做
+  if(typeof value !== 'object' || value === null | seen.has(value)) return
+  // 將數據添加到 seen 中， 代表遍歷讀取過了，避免循環引用引起死循環
+  seen.add(value)
+  for(const k in value){
+    traverse(value[k],seen)
+  }
+  return value
+}
+```
+
+也可以傳遞一個 `getter` 函式，因此我們需要支援傳入函式
+```javascript
+function watch(source,cb){
+  let getter
+  if(typeof source === 'function'){
+    getter = source
+  }else{
+    getter = () => traverse(source)
+  }
+
+  effect(
+    ()=> getter(),
+    {
+      scheduler(){
+        cb()
+      }
+    }
+  )
+}
+```
+
+在平常業務中，最常使用的新值與舊值功能我們還沒實現，如何獲取舊值呢？
+其實透過 `lazy` 就能簡單實現該功能， 首次呼叫 `watch` 時，手動呼叫 `effectFn`，當每次獲取 `newValue` 後，切記要將當前 `newValue` 賦值給 `oldValue`，否則 `oldValue` 永遠是首次呼叫 `watch` 時的值
+
+```javascript
+function watch(source,cb){
+  let getter
+  if(typeof source === 'function'){
+    getter = source
+  }else{
+    getter = () => traverse(source)
+  }
+
+  let oldValue, newValue
+  const effectFn = effect(
+    ()=> getter(),
+    {
+      lazy:true,
+      scheduler(){
+        newValue = effectFn()
+        cb(newValue,oldValue)
+        // 將舊值更新
+        oldValue = newValue
+      }
+    }
+  )
+  // 首次調用 watch 時獲取舊值
+  oldValue = effectFn()
+}
+```
+
+### 立即執行的 watch 與回調執行時機
+
+再使用 [Vue watch](https://cn.vuejs.org/api/options-state.html#watch) 時，我們有時會使用到 立即執行 `immediate` 與 回調執行時機 [flush](https://cn.vuejs.org/guide/essentials/watchers.html#callback-flush-timing) 參數，接下來我們來封裝這兩個 `options`
+
+`immediate` 回調函式會在 `watch` 創建時立即執行一次， 該功能其實調用當前 `scheduler` 裡的方法即可， 我們將當前 `scheduler` 裡的方法封裝成一個函式
+
+```javascript
+function watch(source,cb,options = {}){
+  /* ... */
+  let oldValue, newValue
+  
+  const job = () =>{
+    newValue = effectFn()
+    cb(newValue,oldValue)
+    // 將舊值更新
+    oldValue = newValue
+  }
+
+  const effectFn = effect(
+    ()=> getter(),
+    {
+      lazy:true,
+      scheduler: job
+    }
+  )
+  
+  if(options.immediate){
+    job()
+  }else{
+    // 首次調用 watch 時獲取舊值
+    oldValue = effectFn()
+  }
+}
+```
+
+接著來實現 `flush` 'post' 功能，`post` 代表調度函式需要將副作用函式放到一個微任務中，並等待 `DOM` 更新結束後再執行 
+
+```javascript
+//watch
+const effectFn = effect(
+  ()=> getter(),
+  {
+    lazy:true,
+    scheduler: ()=>{
+      if(options.flush === 'post'){
+        const p = Promise.resolve()
+        p.then(job)
+      }else{
+        job()
+      }
+    }
+  }
+)
 ```

@@ -112,6 +112,57 @@ function computed(getter){
   return obj
 }
 
+function watch(source,cb,options = {}){
+  let getter
+  if(typeof source === 'function'){
+    getter = source
+  }else{
+    getter = () => traverse(source)
+  }
+
+  let oldValue, newValue
+  
+  const job = () =>{
+    newValue = effectFn()
+    cb(newValue,oldValue)
+    // 將舊值更新
+    oldValue = newValue
+  }
+
+  const effectFn = effect(
+    ()=> getter(),
+    {
+      lazy:true,
+      scheduler: ()=>{
+        if(options.flush === 'post'){
+          const p = Promise.resolve()
+          p.then(job)
+        }else{
+          job()
+        }
+      }
+    }
+  )
+
+  if(options.immediate){
+    job()
+  }else{
+    // 首次調用 watch 時獲取舊值
+    oldValue = effectFn()
+  }
+}
+
+function traverse(value,seen = new Set()){
+  // 如果要讀取的數據是原始值，或者已經被讀取過了，那什麼都不做
+  if(typeof value !== 'object' || value === null | seen.has(value)) return
+  // 將數據添加到 seen 中， 代表遍歷讀取過了，避免循環引用引起死循環
+  seen.add(value)
+  for(const k in value){
+    traverse(value[k],seen)
+  }
+  return value
+}
+
 // test 1
 // effect(function effectFn () {
 //   document.body.innerText = obj.ok ? obj.text : 'not'
