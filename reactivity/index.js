@@ -122,9 +122,23 @@ function watch(source,cb,options = {}){
 
   let oldValue, newValue
   
+  // cleanup 用來存儲用戶註冊的過期回調
+  let cleanup
+  
+  // onInvalidate 函數
+  function onInvalidate(fn){
+    // 將過期回調存儲到 cleanup 中
+    cleanup = fn
+  }
+
   const job = () =>{
     newValue = effectFn()
-    cb(newValue,oldValue)
+    // 在回調函式 cb 之前，先調用過期回調
+    if(cleanup){
+      cleanup()
+    }
+    // 將 onInvalidate 作為回調函式的第三個參數，以便用戶使用
+    cb(newValue,oldValue,onInvalidate)
     // 將舊值更新
     oldValue = newValue
   }

@@ -585,3 +585,62 @@ const effectFn = effect(
   }
 )
 ```
+
+### 過期的副作用
+
+如果在 `watch` 中使用非同步方法時，有時會產生競態問題，意思是假設第一次觸發回調，call 了一次 API 稱為 A，但還沒返回時，又觸發第二次回調 B，此時B的資料先返回，後續才是 A ，但我們認定 B 的資料是最新的，這時就會發生顯示到舊資料的問題。
+
+為了解決該問題， 必須在 `watch` 中提供方法讓使用者拋棄舊有結果，供使用者解決該問題。  
+我們可以提供一個 `onInvalidate` 方法 以及 `cleanup` 來紀錄是否有過期回調，
+
+```javascript
+function watch(source,cb,options = {}){
+  /* ... */
+  
+  // cleanup 用來存儲用戶註冊的過期回調
+  let cleanup
+  
+  // onInvalidate 函數
+  function onInvalidate(fn){
+    // 將過期回調存儲到 cleanup 中
+    cleanup = fn
+  }
+
+  const job = () =>{
+    newValue = effectFn()
+    // 在回調函式 cb 之前，先調用過期回調
+    if(cleanup){
+      cleanup()
+    }
+    // 將 onInvalidate 作為回調函式的第三個參數，以便用戶使用
+    cb(newValue,oldValue,onInvalidate)
+    // 將舊值更新
+    oldValue = newValue
+  }
+  /* ... */
+}
+```
+
+此時使用者就能調用 `onInvalidate` 方法，當 `cleanup` 存在時就會呼叫 `onInvalidate` 裡提供的函式。
+
+```javascript
+watch(obj,async (newValue,oldValue,onInvalidate)=>{
+  let expired = false
+  onInvalidate(()=>{
+    expired = true
+  })
+
+  const res = await fetch('/path/XXX',obj)
+  if(!expired){
+    data = res
+  }
+})
+// first A
+obj.foo++
+setTimeout(()=>{
+  // second B after 200ms
+  obj.foo++
+},200)
+```
+
+以上面例子來說，首次更新 `obj.foo` 時， A `expired = false` ， 當 200ms 後修改 `obj.foo` ，此時 cleanup 的值會是 A 的過期回調， 將 A `expired` 改為 `true` ，這樣就算 A 比較晚回傳回來， 也不會將 `res` 結果賦值給 `data`
