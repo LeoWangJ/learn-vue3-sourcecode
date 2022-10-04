@@ -32,6 +32,7 @@ function cleanup(effectFn) {
 }
 
 const data = { ok :true, text: 'hello world', bar:1, foo: 2}
+const ITERATE_KEY = Symbol()
 
 const obj = new Proxy(data,{
   get(target,key){
@@ -41,6 +42,14 @@ const obj = new Proxy(data,{
   set(target,key,newVal){
     target[key] = newVal
     trigger(target,key)
+  },
+  has(target,key){
+    track(target,key)
+    return Reflect.has(target,key)
+  },
+  ownKeys(target){
+    track(target,ITERATE_KEY)
+    return Reflect.ownKeys(target)
   }
 })
 

@@ -644,3 +644,43 @@ setTimeout(()=>{
 ```
 
 以上面例子來說，首次更新 `obj.foo` 時， A `expired = false` ， 當 200ms 後修改 `obj.foo` ，此時 cleanup 的值會是 A 的過期回調， 將 A `expired` 改為 `true` ，這樣就算 A 比較晚回傳回來， 也不會將 `res` 結果賦值給 `data`
+
+
+## 非原始值的響應式方案
+
+### 如何代理 Object
+
+一個普通物件的所有可能讀取操作:
+1. 訪問屬性： obj.foo
+2. 判斷物件或原型上是否存在給定的 key： key in obj
+3. 使用 for ... in 循環遍歷物件： for(cont key in obj) {}
+
+目前我們僅支援訪問屬性，接下來需要處理剩下的情況
+- 攔截 in 操作符
+參考 [Proxy has](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy/Proxy/has)
+
+```javascript
+const obj = new Proxy(data,{
+  has(target,key){
+    track(target,key)
+    return Reflect.has(target,key)
+  }
+})
+```
+- 攔截 for ... in 循環
+我們可以透過 [Proxy ownKeys](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy/Proxy/ownKeys) 攔截函數
+```javascript
+const obj = new Proxy(data,{
+  ownKeys(target){
+    // 將副作用函式與 ITERATE_KEY 關聯
+    track(target,ITERATE_KEY)
+    return Reflect.ownKeys(target)
+  }
+})
+```
+
+### 合理地觸發響應
+
+### 淺響應與深響應
+
+### 只讀和淺只讀
