@@ -39,9 +39,11 @@ const obj = new Proxy(data,{
     track(target,key)
     return target[key]
   },
-  set(target,key,newVal){
-    target[key] = newVal
+  set(target,key,newVal,receiver){
+    // 設置屬性值
+    const res = Reflect.set(target,key,newVal,receiver)
     trigger(target,key)
+    return res
   },
   has(target,key){
     track(target,key)
@@ -71,6 +73,9 @@ function trigger(target,key){
   const depsMap = bucket.get(target)
   if(!depsMap) return
   const effects = depsMap.get(key)
+  // 取得與 ITERATE_KEY 相關連的副作用函式
+  const iterateEffects = depsMap.get(ITERATE_KEY)
+
   // 創建一個新的Set，可參考 Set.prototype.forEach 會造成什麼問題
   const effectsToRun = new Set(effects)
   effects && effects.forEach(effectFn =>{
@@ -79,6 +84,13 @@ function trigger(target,key){
       effectsToRun.add(effectFn)
     }
   })
+
+  iterateEffects & iterateEffects.forEach(effectFn =>{
+    if(effectFn !== activeEffect){
+      effectsToRun.add(effectFn)
+    }
+  })
+  
   effectsToRun.forEach(effectFn => {
     // 如果存在調度器，則調用調度器，並將副作用函式作為參數傳遞
     if(effectFn.options.scheduler){

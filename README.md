@@ -670,6 +670,7 @@ const obj = new Proxy(data,{
 - 攔截 for ... in 循環
 我們可以透過 [Proxy ownKeys](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy/Proxy/ownKeys) 攔截函數
 ```javascript
+const data = { foo:1 }
 const obj = new Proxy(data,{
   ownKeys(target){
     // 將副作用函式與 ITERATE_KEY 關聯
@@ -677,6 +678,53 @@ const obj = new Proxy(data,{
     return Reflect.ownKeys(target)
   }
 })
+
+effect(()=>{
+  for(const key in obj){
+    console.log(key) // foo
+  }
+})
+```
+此時我們用 `for ... in` 讀取 `obj` 代理物件時， 會將 `ITERATE_KEY` 副作用函式做關聯。  
+
+```
+obj.foo = 2
+```
+我們對 `obj` 添加 `foo` 參數時，理想上是會觸發 `ITERATE_KEY` 副作用函式重新執行， 不過當前 `set` 攔截函數接收到的 `key` 會是 `foo` 所以並不會觸發 `ITERATE_KEY` 副作用函式。
+
+要解決這問題，只要當添加屬性時，將那些與 `ITERATE_KEY` 相關聯的副作用函式也取出來就可以了。
+```javascript
+function trigger(target,key){
+  const depsMap = bucket.get(target)
+  if(!depsMap) return
+  const effects = depsMap.get(key)
+  // 取得與 ITERATE_KEY 相關連的副作用函式
+  const iterateEffects = depsMap.get(ITERATE_KEY)
+
+  // 創建一個新的Set，可參考 Set.prototype.forEach 會造成什麼問題
+  const effectsToRun = new Set(effects)
+  effects && effects.forEach(effectFn =>{
+    // 如果 trigger 觸發執行的副作用函式與當前正在執行的副作用函式相同，則不進行觸發
+    if(effectFn !== activeEffect){
+      effectsToRun.add(effectFn)
+    }
+  })
+
+  iterateEffects & iterateEffects.forEach(effectFn =>{
+    if(effectFn !== activeEffect){
+      effectsToRun.add(effectFn)
+    }
+  })
+  
+  effectsToRun.forEach(effectFn => {
+    // 如果存在調度器，則調用調度器，並將副作用函式作為參數傳遞
+    if(effectFn.options.scheduler){
+      effectFn.options.scheduler(effectFn)
+    }else{
+      effectFn()
+    }
+  })
+}
 ```
 
 ### 合理地觸發響應
