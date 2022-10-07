@@ -727,8 +727,173 @@ function trigger(target,key){
 }
 ```
 
-### 合理地觸發響應
+此時新增屬性已經可以正常觸發 `ITERATE_KEY` 副作用函式，但是當我們修改屬性的值時，對於 `foo ... in` 來說並不會產生影響，所以需要區分新增屬性與修改屬性，當只有新增屬性時，我們才會觸發 `ITERATE_KEY` 副作用函式
 
+```javascript
+const triggerType = {
+  SET:'SET',
+  ADD:'ADD',
+}
+
+const obj = new Proxy(data,{
+  set(target,key,newVal,receiver){
+    // 如果屬性不存在，則說明是在添加新屬性，否則是設置已有屬性
+    const type = Object.prototype.hasOwnProperty.call(target,key) ? triggerType.SET : triggerType.ADD
+    // 設置屬性值
+    const res = Reflect.set(target,key,newVal,receiver)
+    trigger(target,key)
+    return res
+  }
+})
+
+function trigger(target,key, type){
+  /* ... */
+  // 只有操作類型為 'ADD' 時，才觸發與 ITERATE_KEY 相關聯的副作用函式重新執行
+  if(type === triggerType.ADD){
+    iterateEffects & iterateEffects.forEach(effectFn =>{
+    if(effectFn !== activeEffect){
+      effectsToRun.add(effectFn)
+      }
+    })
+  }
+  /* ... */
+}
+```
+接下來就剩下刪除屬性操作的代理要處理，可以使用 [proxy deleteProperty](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy/Proxy/deleteProperty) 來攔截
+
+```javascript
+const obj = new Proxy(data,{
+  deleteProperty(target,key){
+    const hadKey = Object.prototype.deleteProperty.call(target,key)
+    const res = Reflect.deleteProperty(target,key)
+
+    if(res && hadKey){
+      trigger(target,key,triggerType.DELETE)
+    }
+    return res
+  }
+})
+
+function trigger(target,key, type){
+  /* ... */
+  // 只有操作類型為 'ADD' 或 'DELETE' 時，才觸發與 ITERATE_KEY 相關聯的副作用函式重新執行
+  if(type === triggerType.ADD || type === triggerType.DELETE){
+    iterateEffects & iterateEffects.forEach(effectFn =>{
+    if(effectFn !== activeEffect){
+      effectsToRun.add(effectFn)
+      }
+    })
+  }
+  /* ... */
+}
+```
+
+### 合理地觸發響應
+雖然我們完成了物件響應的各種情況，不過某些情況還是沒有處理到
+1. 當值沒有發生變化時，不需要觸發響應
+```javascript
+const obj = { foo : 1}
+const p = new Proxy(obj,{ /* ... */})
+effect(() => {
+  console.log(p.foo)
+})
+// 理想情況，修改的值沒變化時，不應該觸發副作用函式
+p.foo = 1
+```
+
+要處理這問題，在 `set` 上判斷當新值與舊值相同時，就不去觸發 `trigger`
+
+```javascript
+  const obj = new Proxy(data,{
+    set(target,key,newVal,receiver){
+      const oldVal = target[key]
+
+      // 如果屬性不存在，則說明是在添加新屬性，否則是設置已有屬性
+      const type = Object.prototype.hasOwnProperty.call(target,key) ? triggerType.SET : triggerType.ADD
+      // 設置屬性值
+      const res = Reflect.set(target,key,newVal,receiver)
+      // 新值與舊值做比較，當不全等時才會觸發
+      if(oldVal !== newVal){
+        trigger(target,key,type)
+      }
+      return res
+    },
+  })
+```
+
+2. NaN === NaN, NaN !== NaN 情況
+依照上述用判斷不全等的方式，在一些情況下還是會失效，例如 `NaN !== NaN`，所以我們需要更嚴謹的判斷方式
+
+```javascript
+const obj = new Proxy(data,{
+    set(target,key,newVal,receiver){
+      const oldVal = target[key]
+
+      // 如果屬性不存在，則說明是在添加新屬性，否則是設置已有屬性
+      const type = Object.prototype.hasOwnProperty.call(target,key) ? triggerType.SET : triggerType.ADD
+      // 設置屬性值
+      const res = Reflect.set(target,key,newVal,receiver)
+      // 新值與舊值做比較，當不全等且都不是 NaN 情況時才會觸發
+      if(oldVal !== newVal && (oldVal === oldVal || newVal === newVal)){
+        trigger(target,key,type)
+      }
+      return res
+    },
+  })
+```
+3. 原型上繼承屬性
+在處理該問題之前，我們先封裝一個 `vue3 reactive` 函式，方便後續處理
+```javascript
+function reactive(obj){
+  return new Proxy(obj,{ /* ... */})
+}
+```
+
+```javascript
+const obj = {}
+const proto = {bar:1}
+const child = reactive(obj)
+const parent = reactive(proto)
+Object.setPrototypeOf(child,parent)
+
+effect(()=>{
+  console.log(child.bar)
+})
+
+child.bar = 2 // 會導致副作用函式重新執行兩次
+```
+理想中我們應該只會觸發一次 副作用函式，但是現實中會觸發兩次。  
+原因是因為我們繼承的 `parent` 也是響應式，副作用函式也會被收集，所以觸發了兩次。  
+找到原因後，我們只要能夠在 `set` 攔截函式區分即可
+
+```javascript
+function reactive(obj) {
+  return new Proxy(obj,{
+    get(target,key){
+      if(key === 'raw'){
+        return target
+      }
+      track(target,key)
+      return target[key]
+    },
+    set(target,key,newVal,receiver){
+      const oldVal = target[key]
+  
+      // 如果屬性不存在，則說明是在添加新屬性，否則是設置已有屬性
+      const type = Object.prototype.hasOwnProperty.call(target,key) ? triggerType.SET : triggerType.ADD
+      // 設置屬性值
+      const res = Reflect.set(target,key,newVal,receiver)
+      // 新值與舊值做比較，當不全等且都不是 NaN 情況時才會觸發
+      if(target === receiver.raw){
+        if(oldVal !== newVal && (oldVal === oldVal || newVal === newVal)){
+         trigger(target,key,type)
+        }
+      }
+      return res
+    },
+  })
+}
+```
 ### 淺響應與深響應
 
 ### 只讀和淺只讀

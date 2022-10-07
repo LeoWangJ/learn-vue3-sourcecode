@@ -2,7 +2,11 @@ const bucket = new WeakMap()
 
 let activeEffect
 const effectStack = []
-
+const triggerType = {
+  SET:'SET',
+  ADD:'ADD',
+  DELETE:'DELETE'
+}
 function effect (fn,options = {}){
   const effectFn = () =>{
     cleanup(effectFn)
@@ -34,26 +38,49 @@ function cleanup(effectFn) {
 const data = { ok :true, text: 'hello world', bar:1, foo: 2}
 const ITERATE_KEY = Symbol()
 
-const obj = new Proxy(data,{
-  get(target,key){
-    track(target,key)
-    return target[key]
-  },
-  set(target,key,newVal,receiver){
-    // 設置屬性值
-    const res = Reflect.set(target,key,newVal,receiver)
-    trigger(target,key)
-    return res
-  },
-  has(target,key){
-    track(target,key)
-    return Reflect.has(target,key)
-  },
-  ownKeys(target){
-    track(target,ITERATE_KEY)
-    return Reflect.ownKeys(target)
-  }
-})
+function reactive(obj) {
+  return new Proxy(obj,{
+    get(target,key){
+      if(key === 'raw'){
+        return target
+      }
+      track(target,key)
+      return target[key]
+    },
+    set(target,key,newVal,receiver){
+      const oldVal = target[key]
+  
+      // 如果屬性不存在，則說明是在添加新屬性，否則是設置已有屬性
+      const type = Object.prototype.hasOwnProperty.call(target,key) ? triggerType.SET : triggerType.ADD
+      // 設置屬性值
+      const res = Reflect.set(target,key,newVal,receiver)
+      // 新值與舊值做比較，當不全等且都不是 NaN 情況時才會觸發
+      if(target === receiver.raw){
+        if(oldVal !== newVal && (oldVal === oldVal || newVal === newVal)){
+         trigger(target,key,type)
+        }
+      }
+      return res
+    },
+    has(target,key){
+      track(target,key)
+      return Reflect.has(target,key)
+    },
+    ownKeys(target){
+      track(target,ITERATE_KEY)
+      return Reflect.ownKeys(target)
+    },
+    deleteProperty(target,key){
+      const hadKey = Object.prototype.deleteProperty.call(target,key)
+      const res = Reflect.deleteProperty(target,key)
+  
+      if(res && hadKey){
+        trigger(target,key,triggerType.DELETE)
+      }
+      return res
+    }
+  })
+}
 
 // 函數追蹤變化
 function track(target,key){
@@ -69,7 +96,7 @@ function track(target,key){
 }
 
 // 函數觸發變化
-function trigger(target,key){
+function trigger(target,key, type){
   const depsMap = bucket.get(target)
   if(!depsMap) return
   const effects = depsMap.get(key)
@@ -85,11 +112,15 @@ function trigger(target,key){
     }
   })
 
-  iterateEffects & iterateEffects.forEach(effectFn =>{
+  // 只有操作類型為 'ADD' 或 'DELETE' 時，才觸發與 ITERATE_KEY 相關聯的副作用函式重新執行
+  if(type === triggerType.ADD || type === triggerType.DELETE){
+    iterateEffects & iterateEffects.forEach(effectFn =>{
     if(effectFn !== activeEffect){
       effectsToRun.add(effectFn)
-    }
-  })
+      }
+    })
+
+  }
   
   effectsToRun.forEach(effectFn => {
     // 如果存在調度器，則調用調度器，並將副作用函式作為參數傳遞
