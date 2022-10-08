@@ -38,14 +38,25 @@ function cleanup(effectFn) {
 const data = { ok :true, text: 'hello world', bar:1, foo: 2}
 const ITERATE_KEY = Symbol()
 
-function reactive(obj) {
+function createReactive(obj,isShallow = false){
   return new Proxy(obj,{
-    get(target,key){
+    get(target,key,receiver){
       if(key === 'raw'){
         return target
       }
+      // 得到原始結果
+      const res = Reflect.get(target,key,receiver)
       track(target,key)
-      return target[key]
+
+      // 如果是淺響應，直接返回原始值
+      if(isShallow){
+        return res
+      }
+      if(typeof res === 'object' && res !== null){
+        // 調用 reactive 將結果包裝成響應式數據並返回
+        return reactive(res)
+      }
+      return res
     },
     set(target,key,newVal,receiver){
       const oldVal = target[key]
@@ -80,6 +91,14 @@ function reactive(obj) {
       return res
     }
   })
+}
+
+function reactive(obj){
+  return createReactive(obj)
+}
+
+function shallowReactive(obj){
+  return createReactive(obj,true)
 }
 
 // 函數追蹤變化

@@ -895,5 +895,94 @@ function reactive(obj) {
 }
 ```
 ### 淺響應與深響應
+現在提供的 `reactive` 函式僅僅只能觸發一層物件的副作用函式
+```javascript
+cnost obj = reactive({foo:{bar:1}})
 
+effect(()=>{
+  console.log(obj.foo.bar)
+})
+
+// 修改值並不能觸發響應
+obj.foo.bar = 2 
+```
+
+問題出在於 `get` 無法與 `bar` 物件做響應聯繫，無法觸發副作用函式
+當前 `get` 方法
+```javascript
+function reactive(obj) {
+  return new Proxy(obj,{
+    get(target,key,receiver){
+      if(key === 'raw'){
+        return target
+      }
+      track(target,key)
+      // 當讀取屬性值時，直接返回結果
+      return Reflect.get(target,key,receiver)
+    },
+  })
+}
+```
+我們必須判斷當 原始結果為物件時，需要對物件再使用 `reactive` 函式，使其變成響應式
+
+```javascript
+function reactive(obj) {
+  return new Proxy(obj,{
+    get(target,key,receiver){
+      if(key === 'raw'){
+        return target
+      }
+      track(target,key)
+      // 得到原始結果
+      const res = Reflect.get(target,key,receiver)
+      if(typeof res === 'object' && res !== null){
+        // 調用 reactive 將結果包裝成響應式數據並返回
+        return reactive(res)
+      }
+      return res
+    },
+  })
+}
+```
+
+但是這樣就會使全部物件都變成深響應，並不是所有情況下都需要，我們必須在兼容淺響應提供給用戶，所謂淺響應指的是只有物件第一層是響應式。  
+
+在此之前，為了方便創造深響應(`reactive`)與淺響應(`shallowReactive`) 兩個函式，我們先封裝一個 `createReactive` 函式僅僅只能觸發一層物件的副作用函式
+
+```javascript
+function createReactive(obj,isShallow = false){
+  return new Proxy(obj,{
+    get(target,key,receiver){
+      if(key === 'raw'){
+        return target
+      }
+      // 得到原始結果
+      const res = Reflect.get(target,key,receiver)
+      track(target,key)
+      
+      // 如果是淺響應，直接返回原始值
+      if(isShallow){
+        return res
+      }
+      if(typeof res === 'object' && res !== null){
+        // 調用 reactive 將結果包裝成響應式數據並返回
+        return reactive(res)
+      }
+      return res
+    },
+    /* ... */
+  })
+}
+```
+接下來就可以輕鬆實作 `reactive` 與 `shallowReactive`
+
+```javascript
+function reactive(obj){
+  return createReactive(obj)
+}
+
+function shallowReactive(obj){
+  return createReactive(obj,true)
+}
+```
 ### 只讀和淺只讀
