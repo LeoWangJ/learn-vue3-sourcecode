@@ -38,7 +38,7 @@ function cleanup(effectFn) {
 const data = { ok :true, text: 'hello world', bar:1, foo: 2}
 const ITERATE_KEY = Symbol()
 
-function createReactive(obj,isShallow = false){
+function createReactive(obj,isShallow = false, isReadonly = false){
   return new Proxy(obj,{
     get(target,key,receiver){
       if(key === 'raw'){
@@ -46,21 +46,28 @@ function createReactive(obj,isShallow = false){
       }
       // 得到原始結果
       const res = Reflect.get(target,key,receiver)
-      track(target,key)
+
+      // 非只讀時才需要建立響應聯繫
+      if(!isReadonly){
+        track(target,key)
+      }
 
       // 如果是淺響應，直接返回原始值
       if(isShallow){
         return res
       }
       if(typeof res === 'object' && res !== null){
-        // 調用 reactive 將結果包裝成響應式數據並返回
-        return reactive(res)
+        return isReadonly ? readonly(res) : reactive(res)
       }
       return res
     },
     set(target,key,newVal,receiver){
+      if(isReadonly){
+        console.warn(`屬性 ${key} 是只讀的`)
+        return true
+      }
       const oldVal = target[key]
-  
+      
       // 如果屬性不存在，則說明是在添加新屬性，否則是設置已有屬性
       const type = Object.prototype.hasOwnProperty.call(target,key) ? triggerType.SET : triggerType.ADD
       // 設置屬性值
@@ -82,6 +89,10 @@ function createReactive(obj,isShallow = false){
       return Reflect.ownKeys(target)
     },
     deleteProperty(target,key){
+      if(isReadonly){
+        console.warn(`屬性 ${key} 是只讀的`)
+        return true
+      }
       const hadKey = Object.prototype.deleteProperty.call(target,key)
       const res = Reflect.deleteProperty(target,key)
   
@@ -99,6 +110,12 @@ function reactive(obj){
 
 function shallowReactive(obj){
   return createReactive(obj,true)
+}
+function readonly(obj){
+  return createReactive(obj, false, true)
+}
+function shallowReadonly(obj){
+  return createReactive(obj, true ,true)
 }
 
 // 函數追蹤變化

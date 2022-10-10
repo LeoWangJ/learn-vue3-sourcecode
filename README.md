@@ -986,3 +986,92 @@ function shallowReactive(obj){
 }
 ```
 ### 只讀和淺只讀
+我們希望一些數據是只讀的，例如 `props` 物件，當嘗試修改時，會得到警告。  
+目前可以修改數值的 `key` 為 `set` 、 `deleteProperty`
+
+```javascript
+function createReactive(obj,isShallow = false, isReadonly = false){
+  return new Proxy(obj,{
+    set(target,key,newVal,receiver){
+      if(isReadonly){
+        console.warn(`屬性 ${key} 是只讀的`)
+        return true
+      }
+      /* ... */
+    },
+    deleteProperty(target,key){
+      if(isReadonly){
+        console.warn(`屬性 ${key} 是只讀的`)
+        return true
+      }
+      /* ... */
+    }
+  })
+}
+```
+除了修改數值之外，我們也無須對只讀值進行響應聯繫
+
+```javascript
+function createReactive(obj,isShallow = false, isReadonly = false){
+  return new Proxy(obj,{
+    get(target,key,receiver){
+      if(key === 'raw'){
+        return target
+      }
+      // 得到原始結果
+      const res = Reflect.get(target,key,receiver)
+
+      // 非只讀時才需要建立響應聯繫
+      if(!isReadonly){
+        track(target,key)
+      }
+
+      /* ... */
+    },
+  })
+}
+```
+
+我們建立一個 `readonly` 函式即完成只讀
+```javascript
+function readonly(obj){
+  return createReactive(obj,false,true)
+}
+```
+
+不過目前還是無法進行深只讀，其實深只讀與深響應判斷的地方相同，只需要判斷 `isReadonly` 為 `true` 時，改遞迴調用 `readonly` 函式即可
+
+```javascript
+function createReactive(obj,isShallow = false, isReadonly = false){
+  return new Proxy(obj,{
+    get(target,key,receiver){
+      if(key === 'raw'){
+        return target
+      }
+      // 得到原始結果
+      const res = Reflect.get(target,key,receiver)
+
+      // 非只讀時才需要建立響應聯繫
+      if(!isReadonly){
+        track(target,key)
+      }
+
+      // 如果是淺響應，直接返回原始值
+      if(isShallow){
+        return res
+      }
+      if(typeof res === 'object' && res !== null){
+        return isReadonly ? readonly(res) : reactive(res)
+      }
+      return res
+    }
+  })
+}
+
+function readonly(obj){
+  return createReactive(obj, false, true)
+}
+function shallowReadonly(obj){
+  return createReactive(obj, true ,true)
+}
+```
