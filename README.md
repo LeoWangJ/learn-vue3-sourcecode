@@ -1075,3 +1075,83 @@ function shallowReadonly(obj){
   return createReactive(obj, true ,true)
 }
 ```
+
+
+### 代理陣列
+待攥寫
+<!-- #### 陣列的索引與 length
+
+#### 遍歷陣列
+
+#### 陣列的查找方法
+
+#### 隱式 修改陣列長度的原型方法 -->
+
+### 代理 Set 和 Map
+待攥寫
+
+
+## 原始值的響應方案
+我們上述討論了非原始值的響應式方案，但是原始值(`null`、`undefined`、`number`、`string`、`symbol`、`boolean`、`BigInt`)的響應式方案尚未處理。
+
+由於 `Proxy` 無法提供對原始值的代理，要對原始值響應，需要包覆一層物件，也就是 `vue3 ref` 的實現原理
+
+```javascript
+function ref(val){
+  const wrapper = {
+    value:val
+  }
+
+  // 為了區分是原始值的包覆對象還是非原始值的響應式數據，定義一個不可枚舉的屬性 __v_isRef
+  Object.defineProperty(wrapper,'__v_isRef',{
+    value: true
+  })
+  return reactive(val)
+}
+```
+
+### 響應丟失問題
+先來看一個情況
+```javascript
+const obj = reactive({foo:1,bar:2})
+const newObj = {...obj}
+
+effect(()=>{
+  // 並不會觸發，因為透過展開運算符賦值給 newObj 時，已經丟失響應
+  console.log(newObj.foo)
+})
+
+obj.foo = 100
+```
+此時會發現 `newObj` 已經不是響應式了，為了解決讓響應式延續，`vue` 提供了 `toRef` 這個方法
+
+```javascript
+function toRef(obj,key){
+  const wrapper = {
+    get value(){
+      return obj[key]
+    },
+    set value(val){
+      obj[key] = val
+    }
+  }
+  
+  Object.defineProperty(wrapper,'__v_isRef',{
+    value: true
+  })
+
+  return wrapper
+}
+```
+
+如果響應式數據的 `key` 值非常多，我們需要每個 `value` 都添加 `toRef`，這顯得非常麻煩，所幸 `vue` 提供 `toRefs` 方法，實現其實就是多一層遍歷
+
+```javascript
+function toRefs(obj){
+  const ret = {}
+  for(const key in obj){
+    ret[key] = toRef(obj,key)
+  }
+  return ret
+}
+```

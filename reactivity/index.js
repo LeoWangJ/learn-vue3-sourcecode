@@ -118,6 +118,43 @@ function shallowReadonly(obj){
   return createReactive(obj, true ,true)
 }
 
+function ref(val){
+  const wrapper = {
+    value:val
+  }
+
+  // 為了區分是原始值的包覆對象還是非原始值的響應式數據，定義一個不可枚舉的屬性 __v_isRef
+  Object.defineProperty(wrapper,'__v_isRef',{
+    value: true
+  })
+  return reactive(val)
+}
+
+function toRef(obj,key){
+  const wrapper = {
+    get value(){
+      return obj[key]
+    },
+    set value(val){
+      obj[key] = val
+    }
+  }
+
+  Object.defineProperty(wrapper,'__v_isRef',{
+    value: true
+  })
+
+  return wrapper
+}
+
+function toRefs(obj){
+  const ret = {}
+  for(const key in obj){
+    ret[key] = toRef(obj,key)
+  }
+  return ret
+}
+
 // 函數追蹤變化
 function track(target,key){
   if(!activeEffect) return 
